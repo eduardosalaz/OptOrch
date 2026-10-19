@@ -1,6 +1,6 @@
 # OptOrch Local-Run Shiny App
 
-This folder contains a local-run Shiny app for running R-Gurobi seed orchard contribution optimization through a graphical user interface. The app allows users to run optimization with their own input data without directly editing the R scripts.
+This folder contains a local-run Shiny app for running the OptOrch seed orchard contribution optimization through a graphical user interface. The app solves the AMPL models in `01_models/` through rAMPL (the AMPL R API), with Gurobi as the solver. The app allows users to run optimization with their own input data without directly editing the R scripts.
 
 For a step-by-step visual guide, see:
 
@@ -10,7 +10,7 @@ OptOrch_Shiny_App_Manual_EN_v1.pdf
 
 ## Important note
 
-The Shiny app runs the optimization locally. It uses the user's local R environment and local Gurobi license. It does not send data to a remote server.
+The Shiny app runs the optimization locally. It uses the user's local R environment, local AMPL installation, and local Gurobi license. It does not send data to a remote server.
 
 Newly generated results are displayed in the current Shiny session. Users can download the selected individuals table manually if needed.
 
@@ -42,22 +42,36 @@ The app requires:
 
 - R
 - Shiny and other required R packages
-- A local Gurobi installation
-- A valid Gurobi license
+- A local AMPL installation with a valid AMPL license
+- The Gurobi solver for AMPL (bundled with AMPL distributions) and a valid Gurobi license
 
 ### Required R packages
 
 Install the required CRAN packages in R:
 
 ```r
-install.packages(c("shiny", "data.table", "Matrix", "ggplot2"))
+install.packages(c("shiny", "data.table", "ggplot2"))
 ```
 
-The app also requires the Gurobi R package. The Gurobi R package is usually installed from the local Gurobi installation directory, not from CRAN.
+The app also requires rAMPL, the AMPL R API, which is not on CRAN:
 
-### Checking the Gurobi installation
+```r
+install.packages("Rcpp", type = "source")
+install.packages("https://ampl.com/dl/API/rAMPL.tar.gz", repos = NULL,
+                 INSTALL_opts = c("--no-multiarch", "--no-staged-install"))
+```
 
-Before running the Shiny app, check that the Gurobi R package and license work correctly. Academic users can use their own academic Gurobi license.
+See https://rampl.ampl.com for details.
+
+### Checking the AMPL installation
+
+rAMPL needs to find the AMPL executable. Either add the AMPL installation folder to the system PATH, or set the environment variable `AMPL_HOME` to that folder before launching R, for example:
+
+```r
+Sys.setenv(AMPL_HOME = "C:/Users/<user>/AMPL")
+```
+
+Before running the Shiny app, check that AMPL, the Gurobi driver and their licenses work, for example by running `02_examples/001_minimal_AMPL_example/` as described in `02_examples/AMPL_example_guide.md`. Academic users can use their own academic AMPL and Gurobi licenses.
 
 ## Input files
 

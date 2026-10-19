@@ -1,12 +1,14 @@
 library(shiny)
 library(data.table)
-library(Matrix)
 library(ggplot2)
 
 # -----------------------------------------------------------------------------
 # OptOrch local-run Shiny app
 # -----------------------------------------------------------------------------
-# This app runs the two R-Gurobi optimization scenarios locally.
+# This app runs the two optimization scenarios locally. The optimization
+# model is the AMPL formulation in 01_models/ (OptOrch_core.mod, plus
+# OptOrch_supp6.mod for pollen contamination), driven through rAMPL by the
+# helper functions in 01_models/optorch_ampl.R. Gurobi is called through AMPL.
 # Important:
 #   - "Run optimization" uses BV.csv and coMatrix.csv in 04_shiny_app/Input_data.
 #   - It displays newly generated results in the Shiny interface.
@@ -55,7 +57,7 @@ validate_repo_root <- function(repo_root) {
 }
 
 check_required_packages <- function() {
-  required <- c("shiny", "data.table", "Matrix", "ggplot2", "gurobi")
+  required <- c("shiny", "data.table", "ggplot2", "rAMPL")
   missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]
   
   if (length(missing) > 0) {
@@ -69,6 +71,24 @@ check_required_packages <- function() {
     )
   }
   
+  invisible(TRUE)
+}
+
+get_model_dir <- function(repo_root) {
+  file.path(repo_root, "01_models")
+}
+
+load_optorch_ampl_helpers <- function(repo_root) {
+  helper_path <- file.path(get_model_dir(repo_root), "optorch_ampl.R")
+
+  if (!file.exists(helper_path)) {
+    stop(
+      paste0("The rAMPL helper file was not found: ", helper_path),
+      call. = FALSE
+    )
+  }
+
+  source(helper_path, local = FALSE)
   invisible(TRUE)
 }
 
@@ -326,57 +346,38 @@ get_mip_gap_param <- function(mip_gap) {
   list(MIPGap = mip_gap_value)
 }
 
-format_run_status <- function(status, objval = NA_real_, runtime = NA_real_) {
+format_run_status <- function(status, objval = NA_real_, runtime = NA_real_, solve_message = "") {
   if (identical(status, "OPTIMAL")) {
     return(paste0(
       "Run status: optimal solution found\n",
-      "Gurobi status: ", status, "\n",
+      "Solver status: ", status, " (", solve_message, ")\n",
       "Objective value: ", objval, "\n",
       "Runtime: ", round(runtime, 2), " seconds"
     ))
   }
-  
-  if (status %in% c("INFEASIBLE", "INF_OR_UNBD")) {
+
+  if (status %in% c("INFEASIBLE", "UNBOUNDED")) {
     return(paste0(
       "Run status: not feasible\n",
-      "Gurobi status: ", status, "\n",
+      "Solver status: ", status, " (", solve_message, ")\n",
       "No selected individuals are available for this run."
     ))
   }
-  
-  if (identical(status, "TIME_LIMIT")) {
+
+  if (identical(status, "LIMIT")) {
     return(paste0(
       "Run status: time limit reached\n",
-      "Gurobi status: ", status, "\n",
+      "Solver status: ", status, " (", solve_message, ")\n",
       "The optimization stopped because the selected TimeLimit was reached.\n",
       "Please check the Summary tab and Gurobi log to see whether a feasible solution was found before the time limit."
     ))
   }
-  
+
   return(paste0(
     "Run status: finished, but no optimal solution was returned\n",
-    "Gurobi status: ", status, "\n",
+    "Solver status: ", status, " (", solve_message, ")\n",
     "Please check the Summary tab and Gurobi log for details."
   ))
-}
-
-build_common_constraints <- function(nc, sum_p, lower_bound, upper_bound) {
-  L <- rep(lower_bound, nc)
-  U <- rep(upper_bound, nc)
-  
-  A_c2 <- Matrix(0, 1, 2 * nc, sparse = TRUE)
-  A_c2[1, 1:nc] <- 1
-  
-  A_c3a <- cbind(Diagonal(nc, 1), Diagonal(nc, -L))
-  A_c3b <- cbind(Diagonal(nc, 1), Diagonal(nc, -U))
-  
-  list(
-    A = rbind(A_c2, A_c3a, A_c3b),
-    rhs = c(sum_p, rep(0, nc), rep(0, nc)),
-    sense = c("=", rep(">", nc), rep("<", nc)),
-    lb = c(rep(0, nc), rep(0, nc)),
-    ub = c(rep(upper_bound, nc), rep(1, nc))
-  )
 }
 
 make_result_tables <- function(
@@ -454,7 +455,8 @@ run_optorch_scenario <- function(
 ) {
   check_required_packages()
   validate_repo_root(repo_root)
-  
+  load_optorch_ampl_helpers(repo_root)
+
   if (lower_bound > upper_bound) {
     stop("The lower contribution bound must not be greater than the upper contribution bound.", call. = FALSE)
   }
@@ -463,11 +465,10 @@ run_optorch_scenario <- function(
   nc <- length(inputs$BV_vec)
   
   if (scenario == "Scenario 1: Status number") {
-    sum_p <- 1
-    quad_rhs <- 1 / (2 * ns)
+    ampl_scenario <- "status_number"
     extra_summary <- list()
   } else {
-    sum_p <- 1 - contamination_rate / 2
+    ampl_scenario <- "pollen_contamination"
     quad_rhs <- (1 / (2 * ns)) - (contamination_rate^2 / (8 * external_pollen_parents))
     
     if (quad_rhs <= 0) {
@@ -491,61 +492,52 @@ run_optorch_scenario <- function(
     )
   }
   
-  cons <- build_common_constraints(
-    nc = nc,
-    sum_p = sum_p,
-    lower_bound = lower_bound,
-    upper_bound = upper_bound
-  )
-  
-  Qc_full <- Matrix::Matrix(0, 2 * nc, 2 * nc, sparse = TRUE)
-  Qc_full[1:nc, 1:nc] <- Matrix::Matrix(inputs$C_mat, sparse = TRUE)
-  
-  model <- list(
-    modelsense = "max",
-    obj = c(inputs$BV_vec, rep(0, nc)),
-    vtype = c(rep("C", nc), rep("B", nc)),
-    lb = cons$lb,
-    ub = cons$ub,
-    A = cons$A,
-    rhs = cons$rhs,
-    sense = cons$sense,
-    quadcon = list(
-      list(
-        Qc = Qc_full,
-        rhs = quad_rhs,
-        sense = "<"
-      )
-    )
-  )
-  
   params <- get_gurobi_param_set(
     param_set = gurobi_param_set,
     output_flag = output_flag
   )
-  
+
   time_limit_param <- get_time_limit_param(time_limit)
   if (length(time_limit_param) > 0) {
     params[names(time_limit_param)] <- time_limit_param
   }
-  
+
   mip_gap_param <- get_mip_gap_param(mip_gap)
   if (length(mip_gap_param) > 0) {
     params[names(mip_gap_param)] <- mip_gap_param
   }
-  
+
   log_file <- tempfile(pattern = "optorch_gurobi_", fileext = ".log")
-  params$LogFile <- log_file
-  
-  res <- gurobi::gurobi(model, params = params)
-  
-  status <- if (!is.null(res$status)) as.character(res$status) else "NULL"
-  objval <- if (!is.null(res$objval)) res$objval else NA_real_
-  runtime <- if (!is.null(res$runtime)) res$runtime else NA_real_
+
+  # Solve the AMPL model (01_models/) through rAMPL with Gurobi.
+  # AMPL is found on PATH or in the folder given by the AMPL_HOME environment variable.
+  ampl <- optorch_ampl_start(solver = "gurobi")
+  on.exit(ampl$close(), add = TRUE)
+
+  res <- optorch_run(
+    ampl,
+    model_dir = get_model_dir(repo_root),
+    scenario = ampl_scenario,
+    b = inputs$BV_vec,
+    c = inputs$C_mat,
+    l = lower_bound,
+    u = upper_bound,
+    ns = ns,
+    contamination_rate = if (ampl_scenario == "pollen_contamination") contamination_rate else NULL,
+    external_pollen_parents = if (ampl_scenario == "pollen_contamination") external_pollen_parents else NULL,
+    gurobi_params = params,
+    log_file = log_file
+  )
+
+  status <- res$status
+  objval <- res$objval
+  runtime <- res$runtime
+  extra_summary$solve_message <- res$solve_message
   run_status_message <- format_run_status(
     status = status,
     objval = objval,
-    runtime = runtime
+    runtime = runtime,
+    solve_message = res$solve_message
   )
   
   if (!identical(status, "OPTIMAL")) {
@@ -568,9 +560,9 @@ run_optorch_scenario <- function(
     ))
   }
   
-  p_vals <- res$x[1:nc]
-  r_vals <- res$x[(nc + 1):(2 * nc)]
-  
+  p_vals <- res$p
+  r_vals <- res$r
+
   if (scenario == "Scenario 2: Pollen contamination") {
     gain_internal <- sum(p_vals * inputs$BV_vec)
     gain_total <- gain_internal + (contamination_rate / 2) * extra_summary$BV_ext_mean

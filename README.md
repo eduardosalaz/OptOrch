@@ -30,7 +30,11 @@ For simulation data generation:
 - `ASRgenomics`
 - `ASRemL-R`
   
-For scenario optimization:
+For scenario optimization (rAMPL scripts, `run_scenario*_ampl.R`):
+- `rAMPL` (AMPL R API, https://rampl.ampl.com) with a local AMPL installation and the Gurobi solver for AMPL
+- `data.table`
+
+For the original scripts that call the Gurobi R API directly (`run_scenario*.R`):
 - `slam`
 - `gurobi`
 - `Matrix`
@@ -42,17 +46,16 @@ For figure generation:
 - `patchwork`
 - `tidyverse`
   
-Note: `ASRemL-R` and `gurobi` require separate installation and licensing.
+Note: `ASRemL-R`, AMPL and `gurobi` require separate installation and licensing.
 ### Local-run Shiny app
 The Shiny app requires:
 * R
 * `shiny`
 * `data.table`
-* `Matrix`
 * `ggplot2`
-* `gurobi`
+* `rAMPL`
 
-Note: The app also requires a local Gurobi installation and a valid Gurobi license. The Shiny app runs locally and uses the user's local R environment and local Gurobi license.
+Note: The app solves the AMPL models in `01_models/` through rAMPL, so it also requires a local AMPL installation (with the Gurobi solver driver) and valid AMPL and Gurobi licenses. The Shiny app runs locally and uses the user's local R environment and local licenses.
 
 ## Repository structure
 ~~~text
@@ -89,6 +92,7 @@ OptOrch/
 │   │       └── Heri_0.2/
 │   ├── 002_scenario1_status_number/
 │   │   ├── run_scenario1_status_number.R
+│   │   ├── run_scenario1_status_number_ampl.R
 │   │   └── outputs/
 │   │       ├── file_description.md
 │   │       ├── ns_10/
@@ -97,6 +101,7 @@ OptOrch/
 │   │       └── ns_40/
 │   ├── 003_scenario2_pollen_contamination/
 │   │   ├── run_scenario2_pollen_contamination.R
+│   │   ├── run_scenario2_pollen_contamination_ampl.R
 │   │   └── outputs/
 │   │       ├── file_description.md
 │   │       ├── ns_10/
@@ -240,9 +245,11 @@ Scenario 1 is provided in:
 03_manuscript_reproduction/002_scenario1_status_number/
 ~~~
 Files and folders:
-- `run_scenario1_status_number.R`
-	- R script for running Scenario 1.
+- `run_scenario1_status_number_ampl.R`
+	- R script for running Scenario 1 through the AMPL model `01_models/001_core/OptOrch_core.mod` via rAMPL.
 	- The script repeats the optimization for `ns = 10, 20, 30, 40`.
+- `run_scenario1_status_number.R`
+	- Original script that builds the same model directly for the Gurobi R API.
 - `outputs/`
 	- Optimization outputs for Scenario 1.
 - `outputs/file_description.md`
@@ -269,9 +276,11 @@ Scenario 2 is provided in:
 03_manuscript_reproduction/003_scenario2_pollen_contamination/
 ~~~
 Files and folders:
-- `run_scenario2_pollen_contamination.R`
-	- R script for running Scenario 2.
+- `run_scenario2_pollen_contamination_ampl.R`
+	- R script for running Scenario 2 through the AMPL models (`OptOrch_core.mod` plus `OptOrch_supp6.mod`) via rAMPL.
 	- The script repeats the optimization for `ns = 10, 20, 30, 40` under pollen contamination.
+- `run_scenario2_pollen_contamination.R`
+	- Original script that builds the same model directly for the Gurobi R API.
 - `outputs/`
 	- Optimization outputs for Scenario 2.
 - `outputs/file_description.md`
@@ -279,11 +288,16 @@ Files and folders:
 The output folders follow the same structure as Scenario 1.
 
 ### Gurobi tuning parameters
-The tuned Gurobi parameter settings used in the manuscript reproduction scripts are defined directly in the two scenario scripts:
-- `03_manuscript_reproduction/002_scenario1_status_number/run_scenario1_status_number.R`
-- `03_manuscript_reproduction/003_scenario2_pollen_contamination/run_scenario2_pollen_contamination.R`
+The tuned Gurobi parameter settings used in the manuscript reproduction scripts are defined directly in the scenario scripts (both the rAMPL and the original versions):
+- `03_manuscript_reproduction/002_scenario1_status_number/run_scenario1_status_number_ampl.R` and `run_scenario1_status_number.R`
+- `03_manuscript_reproduction/003_scenario2_pollen_contamination/run_scenario2_pollen_contamination_ampl.R` and `run_scenario2_pollen_contamination.R`
 
-In both scripts, the tuned configurations are stored in the object `tuned_params_by_ns <- list()`. This object contains the parameter values for each status-number level (`ns = 10, 20, 30, 40`). During execution, the script selects the parameter set corresponding to the specified `ns` value and passes it to the Gurobi optimizer. These tuned settings correspond to the Gurobi parameters summarized in Table 1 of the manuscript.
+In all scripts, the tuned configurations are stored in the object `tuned_params_by_ns <- list()`. This object contains the parameter values for each status-number level (`ns = 10, 20, 30, 40`). During execution, the script selects the parameter set corresponding to the specified `ns` value and passes it to the Gurobi optimizer. In the rAMPL versions the parameters keep their native Gurobi names and are forwarded unchanged through the AMPL Gurobi driver (`optionnative`), see `01_models/optorch_ampl.R`. These tuned settings correspond to the Gurobi parameters summarized in Table 1 of the manuscript.
+
+### rAMPL interface
+`01_models/optorch_ampl.R` contains the R functions that drive the AMPL models through rAMPL. They load the model files, push the breeding values, coancestry matrix, bounds and scalar parameters from R into AMPL, run the solver and return the status, objective value and the `p` and `r` vectors. The scenario scripts and the Shiny app share these functions, so the AMPL model files remain the single definition of the optimization formulation.
+
+AMPL is located through the system PATH, or through the `AMPL_HOME` environment variable pointing to the AMPL installation folder.
 
 ### Step 4. Figure 2 reproduction
 Figure 2 can be reproduced using:
@@ -329,13 +343,14 @@ Before running a script, set the working directory to the folder containing that
 For example, to run Scenario 1:
 ~~~r
 setwd("03_manuscript_reproduction/002_scenario1_status_number")
-source("run_scenario1_status_number.R")
+source("run_scenario1_status_number_ampl.R")   # or run_scenario1_status_number.R for the Gurobi R API version
 ~~~
 To run Scenario 2:
 ~~~r
 setwd("03_manuscript_reproduction/003_scenario2_pollen_contamination")
-source("run_scenario2_pollen_contamination.R")
+source("run_scenario2_pollen_contamination_ampl.R")   # or run_scenario2_pollen_contamination.R for the Gurobi R API version
 ~~~
+Both rAMPL scripts accept optional environment variables for quick tests: `OPTORCH_NS_GRID` (e.g. `"10,20"`), `OPTORCH_ITER_GRID` (e.g. `"1"`) and `OPTORCH_TIME_LIMIT` (seconds). Note that the scripts write into `outputs/` and overwrite the files of the selected replicates.
 To reproduce figure 2:
 ~~~r
 setwd("03_manuscript_reproduction/004_figures/figure2_contributions")
@@ -348,11 +363,11 @@ source("make_figure3_genetic_response.R")
 ~~~
 ## Software notes
 - The AMPL example requires AMPL and an optimization solver.
-- The R-based scenario scripts require the R package `gurobi` and a working Gurobi installation.
+- The rAMPL scenario scripts (`*_ampl.R`) require rAMPL, a working AMPL installation and the Gurobi solver for AMPL. The original `run_scenario*.R` scripts require the R package `gurobi` and a working Gurobi installation.
 - The simulation script requires MoBPS and ASRemL-R.
 - The scenario and figure scripts use relative paths. Run each script from its own folder.
 - The authors used Gurobi as the optimization solver.
-- The local-run Shiny app requires `shiny`, `data.table`, `Matrix`, `ggplot2`, `gurobi`, and a working local Gurobi license.
+- The local-run Shiny app requires `shiny`, `data.table`, `ggplot2`, `rAMPL`, a local AMPL installation and working local AMPL and Gurobi licenses.
 ## Contact
 For any inquiries, please contact:
 - Corresponding author: Prof. Milan Lstibůrek
