@@ -22,3 +22,4 @@ s.t. c2: sum {i in S} p[i] = 1;
 s.t. c3a {i in S}: p[i] >= r[i] * l[i];
 s.t. c3b {i in S}: p[i] <= r[i] * u[i];
 
+
